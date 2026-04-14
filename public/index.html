@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Analyze any GitHub profile in seconds. Get rankings, stats, language breakdowns, commit activity, and a composite developer score — all in a stunning glassmorphism dashboard." />
+  <title>GitHub Profile Analyzer — Dev Score & Rankings</title>
+
+  <!-- Preconnect for performance -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="./css/styles.css" />
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <!-- Animated background blobs -->
+  <div class="bg-blobs" aria-hidden="true">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+  </div>
+
+  <div class="container">
+
+    <!-- ── Hero / Search ─────────────────────────────────────── -->
+    <header class="hero">
+      <h1 class="hero-title">GitHub Profile Analyzer</h1>
+      <p class="hero-subtitle">Discover your developer rank, stats &amp; insights — instantly.</p>
+
+      <div class="search-wrapper" role="search">
+        <label for="searchInput" class="sr-only" style="position:absolute;opacity:0">GitHub username</label>
+        <input
+          id="searchInput"
+          class="search-input"
+          type="text"
+          placeholder="Enter a GitHub username…"
+          maxlength="39"
+          autocomplete="off"
+          autocorrect="off"
+          spellcheck="false"
+          aria-label="GitHub username"
+        />
+        <button id="searchBtn" class="search-btn" aria-label="Analyze profile">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <span id="btnText">Analyze</span>
+          <div id="spinner" class="spinner" aria-label="Loading"></div>
+        </button>
+      </div>
+
+      <!-- Quick examples -->
+      <p style="margin-top:1rem;font-size:0.8rem;color:#475569;">
+        Try:
+        <button onclick="quickSearch('torvalds')"      class="quick-link">torvalds</button>
+        <button onclick="quickSearch('gaearon')"       class="quick-link">gaearon</button>
+        <button onclick="quickSearch('sindresorhus')"  class="quick-link">sindresorhus</button>
+      </p>
+    </header>
+
+    <!-- ── Results Dashboard ──────────────────────────────────── -->
+    <main id="results" role="main" aria-live="polite"></main>
+
+    <!-- ── Footer ────────────────────────────────────────────── -->
+    <footer class="footer">
+      Built with ❤️ using Node.js + Express · Data via
+      <a href="https://docs.github.com/en/rest" target="_blank" rel="noopener">GitHub REST API</a>
+    </footer>
+
+  </div>
+
+  <!-- Quick search helper (defined before app.js to be safe) -->
+  <script>
+    function quickSearch(name) {
+      document.getElementById('searchInput').value = name;
+      document.getElementById('searchBtn').click();
+    }
+  </script>
+
+  <!-- Application logic -->
+  <script src="./js/app.js"></script>
+
+  <style>
+    /* Quick-search link buttons */
+    .quick-link {
+      background: none;
+      border: none;
+      color: #7c3aed;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0 0.3rem;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      transition: color 0.2s;
+    }
+    .quick-link:hover { color: #9f67fa; }
+  </style>
+</body>
+</html>

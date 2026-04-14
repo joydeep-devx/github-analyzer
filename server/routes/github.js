@@ -155,61 +155,103 @@ router.get('/languages/:username', async (req, res) => {
   }
 });
 
-/**
- * GET /api/github/events/:username
- * Commit activity (last 90 days) + streaks
- */
-router.get('/events/:username', async (req, res) => {
-  try {
-    const username = sanitizeUsername(req.params.username);
-    const events = await githubGet(
-      `https://api.github.com/users/${username}/events/public?per_page=100`
-    );
+// ─── GraphQL helper for contributions ────────────────────────────────────────
 
-    const now      = new Date();
-    const cutoff   = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
-    const dailyMap = {};
-
-    for (const event of events) {
-      if (event.type !== 'PushEvent') continue;
-      const date = new Date(event.created_at);
-      if (date < cutoff) continue;
-      const key = date.toISOString().split('T')[0];
-      const commits = event.payload?.commits?.length || 0;
-      dailyMap[key] = (dailyMap[key] || 0) + commits;
-    }
-
-    // Build streak
-    let currentStreak = 0;
-    let longestStreak = 0;
-    let streak = 0;
-    const today = now.toISOString().split('T')[0];
-
-    for (let i = 0; i < 90; i++) {
-      const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
-      const key = d.toISOString().split('T')[0];
-      if (dailyMap[key] > 0) {
-        streak++;
-        if (i === 0 || i === 1) currentStreak = streak; // allow yesterday gap
-      } else {
-        if (i <= 1) { /* allow 1-day gap at start */ } else {
-          if (streak > longestStreak) longestStreak = streak;
-          streak = 0;
+async function fetchContributionsGraphQL(username) {
+  const query = `
+    query($username: String!) {
+      user(login: $username) {
+        contributionsCollection {
+          contributionCalendar {
+            totalContributions
+            weeks {
+              contributionDays {
+                contributionCount
+                date
+              }
+            }
+          }
         }
       }
     }
-    if (streak > longestStreak) longestStreak = streak;
-    currentStreak = streak; // final run
+  `;
 
-    const totalCommits90d = Object.values(dailyMap).reduce((s, c) => s + c, 0);
+  const response = await axios.post(
+    'https://api.github.com/graphql',
+    { query, variables: { username } },
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
 
+  if (response.data.errors) {
+    throw new Error(response.data.errors[0]?.message || 'GraphQL error');
+  }
+
+  const calendar =
+    response.data.data.user.contributionsCollection.contributionCalendar;
+
+  const allDays = calendar.weeks.flatMap(week => week.contributionDays);
+
+  // Current streak (walk backwards from today)
+  let currentStreak = 0;
+  for (let i = allDays.length - 1; i >= 0; i--) {
+    if (allDays[i].contributionCount > 0) currentStreak++;
+    else break;
+  }
+
+  // Longest streak (full calendar year)
+  let longestStreak = 0;
+  let tempStreak = 0;
+  for (const day of allDays) {
+    if (day.contributionCount > 0) {
+      tempStreak++;
+      longestStreak = Math.max(longestStreak, tempStreak);
+    } else {
+      tempStreak = 0;
+    }
+  }
+
+  // Last 90 days
+  const last90Days = allDays.slice(-90);
+  const totalCommits90d = last90Days.reduce((sum, d) => sum + d.contributionCount, 0);
+
+  // dailyMap: { 'YYYY-MM-DD': count } — matches what buildActivityChart() expects
+  const dailyMap = {};
+  for (const d of last90Days) {
+    dailyMap[d.date] = d.contributionCount;
+  }
+
+  return {
+    totalContributions: calendar.totalContributions,
+    currentStreak,
+    longestStreak,
+    totalCommits90d,
+    dailyMap,
+    // array form for the standalone /contributions endpoint
+    dailyActivity: last90Days.map(d => ({ date: d.date, count: d.contributionCount })),
+  };
+}
+
+/**
+ * GET /api/github/contributions/:username
+ * Standalone GraphQL-based contribution data (accurate streaks + calendar)
+ */
+router.get('/contributions/:username', async (req, res) => {
+  try {
+    const username = sanitizeUsername(req.params.username);
+    const contrib = await fetchContributionsGraphQL(username);
     res.json({
       success: true,
       data: {
-        current_streak:     currentStreak,
-        longest_streak:     longestStreak,
-        total_commits_90d:  totalCommits90d,
-        daily_activity:     dailyMap,
+        totalContributions: contrib.totalContributions,
+        currentStreak:      contrib.currentStreak,
+        longestStreak:      contrib.longestStreak,
+        totalCommits90d:    contrib.totalCommits90d,
+        dailyActivity:      contrib.dailyActivity,
       },
     });
   } catch (err) {
@@ -225,11 +267,11 @@ router.get('/stats/:username', async (req, res) => {
   try {
     const username = sanitizeUsername(req.params.username);
 
-    // Fan out all requests in parallel
-    const [userRes, reposRes, eventsRes] = await Promise.all([
+    // Fan out REST calls + GraphQL contributions in parallel
+    const [userRes, reposRes, contrib] = await Promise.all([
       githubGet(`https://api.github.com/users/${username}`),
       githubGet(`https://api.github.com/users/${username}/repos?per_page=100&sort=updated`),
-      githubGet(`https://api.github.com/users/${username}/events/public?per_page=100`),
+      fetchContributionsGraphQL(username),   // ← accurate GraphQL data
     ]);
 
     // Aggregate stars & forks
@@ -240,37 +282,9 @@ router.get('/stats/:username', async (req, res) => {
     // Language diversity from primary language field (fast path)
     const langSet = new Set(reposRes.map(r => r.language).filter(Boolean));
 
-    // Commit data
-    const now    = new Date();
-    const cutoff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
-    let totalCommits90d = 0;
-    let currentStreak   = 0;
-    const dailyMap = {};
-    for (const event of eventsRes) {
-      if (event.type !== 'PushEvent') continue;
-      const date = new Date(event.created_at);
-      if (date < cutoff) continue;
-      const key = date.toISOString().split('T')[0];
-      const commits = event.payload?.commits?.length || 0;
-      dailyMap[key] = (dailyMap[key] || 0) + commits;
-      totalCommits90d += commits;
-    }
-    let streak = 0;
-    let longestStreak = 0;
-    for (let i = 0; i < 90; i++) {
-      const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
-      const key = d.toISOString().split('T')[0];
-      if (dailyMap[key] > 0) {
-        streak++;
-      } else {
-        if (streak > longestStreak) longestStreak = streak;
-        if (i > 1) streak = 0;
-      }
-    }
-    if (streak > longestStreak) longestStreak = streak;
-    currentStreak = streak;
-
     const accountAgeYears = (Date.now() - new Date(userRes.created_at).getTime()) / (1000 * 60 * 60 * 24 * 365.25);
+
+    const { currentStreak, longestStreak, totalCommits90d, dailyMap } = contrib;
 
     // Score
     const scoreData = {
@@ -282,7 +296,7 @@ router.get('/stats/:username', async (req, res) => {
       totalCommits90d,
       languageCount:  langSet.size,
       accountAgeYears,
-      totalIssuesAndPRs: 0, // Enriched via separate search endpoint if needed
+      totalIssuesAndPRs: 0,
     };
 
     const { total, breakdown, rank } = calculateScore(scoreData);
@@ -312,7 +326,7 @@ router.get('/stats/:username', async (req, res) => {
           currentStreak,
           longestStreak,
           languageCount: langSet.size,
-          dailyActivity: dailyMap,
+          dailyActivity: dailyMap,   // { 'YYYY-MM-DD': count } map
         },
         topRepos: ownRepos
           .sort((a, b) => b.stargazers_count - a.stargazers_count)
